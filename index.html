@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Карта воздушных тревог Украины</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: Arial, sans-serif;
+        }
+        #map {
+            width: 100%;
+            height: 100vh;
+        }
+        .info {
+            padding: 6px 8px;
+            font: 14px/16px Arial, Helvetica, sans-serif;
+            background: white;
+            background: rgba(255,255,255,0.8);
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            border-radius: 5px;
+        }
+        .legend {
+            line-height: 18px;
+            color: #555;
+        }
+        .legend i {
+            width: 18px;
+            height: 18px;
+            float: left;
+            margin-right: 8px;
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script>
+        // Инициализация карты
+        const map = L.map('map').setView([48.5, 31], 6);
+        
+        // Добавление слоя OpenStreetMap
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+        
+        // Переменные для хранения данных
+        let oblastGeoJson;
+        let alerts = [];
+        
+        // Загрузка GeoJSON данных областей Украины
+        fetch('https://raw.githubusercontent.com/alexcustos/ukraine-map-json/master/ukraine_regions.geojson')
+            .then(response => response.json())
+            .then(data => {
+                oblastGeoJson = data;
+                fetchAlerts();
+            });
+        
+        // Загрузка данных о тревогах
+        function fetchAlerts() {
+            fetch('https://api.alerts.in.ua/v1/alerts/active.json?token=5d09322bcdfb8daceeb68065134f7099ef6f990dab2203')
+                .then(response => response.json())
+                .then(data => {
+                    alerts = data.alerts;
+                    renderMap();
+                })
+                .catch(error => {
+                    console.error('Ошибка при загрузке данных о тревогах:', error);
+                });
+        }
+        
+        // Функция для определения цвета области в зависимости от типа тревоги
+        function getColor(oblast) {
+            const alertsInOblast = alerts.filter(alert => 
+                alert.location_type === 'oblast' && 
+                alert.location_oblast === oblast
+            );
+            
+            if (alertsInOblast.length === 0) {
+                return '#4CAF50'; // Зеленый - нет тревоги
+            }
+            
+            const alertTypes = alertsInOblast.map(a => a.alert_type);
+            
+            if (alertTypes.includes('urban_fights')) {
+                return '#000000'; // Черный - уличные бои
+            } else if (alertTypes.includes('artillery_shelling')) {
+                return '#D32F2F'; // Темно-красный - артобстрел
+            } else if (alertTypes.includes('air_raid')) {
+                return '#FFC107'; // Желтый - воздушная тревога
+            } else {
+                return '#FFA000'; // Оранжевый - другой тип тревоги
+            }
+        }
+        
+        // Отрисовка карты
+        function renderMap() {
+            // Если geojson слой уже существует - удаляем его
+            if (window.geojsonLayer) {
+                map.removeLayer(window.geojsonLayer);
+            }
+            
+            // Добавляем новый слой с актуальными данными
+            window.geojsonLayer = L.geoJSON(oblastGeoJson, {
+                style: function(feature) {
+                    return {
+                        fillColor: getColor(feature.properties.name),
+                        weight: 2,
+                        opacity: 1,
+                        color: 'white',
+                        dashArray: '3',
+                        fillOpacity: 0.7
+                    };
+                },
+                onEachFeature: function(feature, layer) {
+                    // Информация при наведении
+                    layer.on({
+                        mouseover: highlightFeature,
+                        mouseout: resetHighlight,
+                        click: zoomToFeature
+                    });
+                    
+                    // Всплывающая подсказка
+                    const alertInfo = getAlertInfo(feature.properties.name);
+                    layer.bindPopup(`<b>${feature.properties.name}</b><br>${alertInfo}`);
+                }
+            }).addTo(map);
+            
+            // Добавляем легенду
+            addLegend();
+            
+            // Устанавливаем время для следующего обновления данных (каждые 60 секунд)
+            setTimeout(fetchAlerts, 60000);
+        }
+        
+        // Получение информации о тревоге для области
+        function getAlertInfo(oblast) {
+            const alertsInOblast = alerts.filter(alert => 
+                alert.location_type === 'oblast' && 
+                alert.location_oblast === oblast
+            );
+            
+            if (alertsInOblast.length === 0) {
+                return 'Тревог нет';
+            }
+            
+            let info = '';
+            alertsInOblast.forEach(alert => {
+                const startDate = new Date(alert.started_at);
+                const formattedDate = `${startDate.toLocaleDateString()} ${startDate.toLocaleTimeString()}`;
+                
+                let alertTypeText = '';
+                switch(alert.alert_type) {
+                    case 'air_raid':
+                        alertTypeText = 'Воздушная тревога';
+                        break;
+                    case 'artillery_shelling':
+                        alertTypeText = 'Артиллерийский обстрел';
+                        break;
+                    case 'urban_fights':
+                        alertTypeText = 'Уличные бои';
+                        break;
+                    default:
+                        alertTypeText = alert.alert_type;
+                }
+                
+                info += `${alertTypeText}<br>Начало: ${formattedDate}<br>`;
+            });
+            
+            return info;
+        }
+        
+        // Функция для подсветки области при наведении
+        function highlightFeature(e) {
+            const layer = e.target;
+            
+            layer.setStyle({
+                weight: 5,
+                color: '#666',
+                dashArray: '',
+                fillOpacity: 0.7
+            });
+            
+            if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) {
+                layer.bringToFront();
+            }
+            
+            info.update(layer.feature.properties);
+        }
+        
+        // Сброс подсветки
+        function resetHighlight(e) {
+            geojsonLayer.resetStyle(e.target);
+            info.update();
+        }
+        
+        // Приближение к области при клике
+        function zoomToFeature(e) {
+            map.fitBounds(e.target.getBounds());
+        }
+        
+        // Добавление информационного блока
+        let info = L.control();
+        
+        info.onAdd = function(map) {
+            this._div = L.DomUtil.create('div', 'info');
+            this.update();
+            return this._div;
+        };
+        
+        info.update = function(props) {
+            this._div.innerHTML = '<h4>Карта воздушных тревог Украины</h4>' +  
+                (props ? 
+                    `<b>${props.name}</b><br>${getAlertInfo(props.name)}` : 
+                    'Наведите на область для информации');
+        };
+        
+        info.addTo(map);
+        
+        // Добавление легенды
+        function addLegend() {
+            if (window.legend) {
+                map.removeControl(window.legend);
+            }
+            
+            window.legend = L.control({position: 'bottomright'});
+            
+            legend.onAdd = function(map) {
+                const div = L.DomUtil.create('div', 'info legend');
+                const grades = [
+                    {color: '#4CAF50', label: 'Нет тревоги'},
+                    {color: '#FFC107', label: 'Воздушная тревога'},
+                    {color: '#D32F2F', label: 'Артиллерийский обстрел'},
+                    {color: '#000000', label: 'Уличные бои'}
+                ];
+                
+                div.innerHTML = '<h4>Легенда</h4>';
+                
+                for (let i = 0; i < grades.length; i++) {
+                    div.innerHTML += 
+                        '<i style="background:' + grades[i].color + '"></i> ' +
+                        grades[i].label + '<br>';
+                }
+                
+                return div;
+            };
+            
+            legend.addTo(map);
+        }
+    </script>
+</body>
+</html>
